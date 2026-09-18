@@ -108,6 +108,11 @@ class TestToolAnnotations:
             "cam_get_operation_info",
             "get_design_type",
             "render_view",
+            "list_faces",
+            "list_edges",
+            "list_profiles",
+            "list_sketch_curves",
+            "list_timeline",
         }
         for t in TOOLS:
             ann = t["annotations"]
@@ -121,7 +126,7 @@ class TestToolAnnotations:
     def test_destructive_tools(self):
         from fusion360_mcp.tools import TOOLS
 
-        destructive = {"delete_all", "delete_parameter"}
+        destructive = {"delete_all", "delete_parameter", "delete_entity"}
         for t in TOOLS:
             ann = t["annotations"]
             if t["name"] in destructive:
@@ -357,14 +362,14 @@ class TestPromptGeneration:
         args = {"length": "30", "width": "20", "height": "10"}
         text = (
             f"Create a sheet metal enclosure "
-            f"({args['length']}x{args['width']}x{args['height']} cm):\n"
+            f"({args['length']}x{args['width']}x{args['height']} mm):\n"
             f"1. create_sketch on xy plane\n"
             f"2. draw_rectangle {args['width']}x{args['length']}\n"
             f"3. extrude to sheet thickness\n"
             f"4. create_flange on each edge\n"
             f"5. flat_pattern to verify unfold"
         )
-        assert "30x20x10 cm" in text
+        assert "30x20x10 mm" in text
         assert "create_flange" in text
         assert "flat_pattern" in text
 

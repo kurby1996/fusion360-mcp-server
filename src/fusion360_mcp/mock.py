@@ -59,6 +59,8 @@ _MUTATION_MOCKS: frozenset[str] = frozenset(
         "auto_constrain",
         "create_ucs",
         "set_color",
+        "delete_entity",
+        "import_step",
     }
 )
 
@@ -101,6 +103,8 @@ def mock_command(command_type: str, params: dict[str, Any] | None = None) -> dic
     if command_type in _MUTATION_MOCKS and "deltas" not in result:
         result["deltas"] = dict(_MOCK_DELTAS)
     result["mode"] = "mock"
+    if command_type not in {"ping", "execute_code"}:
+        result.setdefault("units", "mm")
     return result
 
 
@@ -148,7 +152,20 @@ def _get_bounding_box(p: dict) -> dict:
 
 def _create_sketch(p: dict) -> dict:
     plane = p.get("plane", "xy")
-    return {"sketch_name": f"Sketch_mock_{plane}", "plane": plane}
+    source = "plane"
+    if p.get("face_token"):
+        source = "face_token"
+    elif p.get("body_name") is not None and p.get("face_index") is not None:
+        source = "face_index"
+    elif p.get("plane_name"):
+        source = "plane_name"
+    name = p.get("name") or f"Sketch_mock_{plane}"
+    return {
+        "sketch_name": name,
+        "plane": plane,
+        "source": source,
+        "token": "tok_sketch_mock",
+    }
 
 
 def _draw_rectangle(p: dict) -> dict:
@@ -176,6 +193,8 @@ def _extrude(p: dict) -> dict:
         "body_name": "Body_mock",
         "height": p.get("height", 1),
         "operation": p.get("operation", "new_body"),
+        "extent": p.get("extent", "distance"),
+        "feature_name": "Extrude_mock",
     }
 
 
@@ -188,7 +207,13 @@ def _revolve(p: dict) -> dict:
 
 
 def _fillet(p: dict) -> dict:
-    return {"body_name": p.get("body_name", "Body1"), "radius": p.get("radius", 0.1)}
+    tokens = p.get("edge_tokens") or []
+    return {
+        "body_name": p.get("body_name", "Body1"),
+        "radius": p.get("radius", 0.1),
+        "feature_name": "Fillet_mock",
+        "edges_count": len(tokens) or 12,
+    }
 
 
 def _chamfer(p: dict) -> dict:
@@ -245,6 +270,146 @@ def _boolean_operation(p: dict) -> dict:
 
 def _delete_all(_p: dict) -> dict:
     return {"deleted": True}
+
+
+def _delete_entity(p: dict) -> dict:
+    return {
+        "deleted": True,
+        "entity_type": p.get("entity_type", "body"),
+        "name": p.get("name", "Body1"),
+        "entity_token": p.get("entity_token"),
+    }
+
+
+def _new_document(p: dict) -> dict:
+    return {
+        "created": True,
+        "document_name": p.get("name") or "MockDesign",
+        "requested_name": p.get("name"),
+    }
+
+
+def _open_document(p: dict) -> dict:
+    return {
+        "opened": True,
+        "file_path": p.get("file_path", "/tmp/part.f3d"),
+        "document_name": "OpenedDesign",
+    }
+
+
+def _save_document(p: dict) -> dict:
+    path = p.get("file_path")
+    return {
+        "saved": True,
+        "file_path": path,
+        "save_mode": "local_f3d" if path else "cloud",
+        "document_name": "MockDesign",
+    }
+
+
+def _list_faces(p: dict) -> dict:
+    body = p.get("body_name", "Body1")
+    return {
+        "body_name": body,
+        "count": 6,
+        "faces": [
+            {
+                "index": 0,
+                "token": "tok_face_0",
+                "body_name": body,
+                "geometry_type": "plane",
+                "area": 50.0,
+                "normal": [0.0, 0.0, 1.0],
+                "point_on_face": [25.0, 15.0, 15.0],
+            }
+        ],
+    }
+
+
+def _list_edges(p: dict) -> dict:
+    body = p.get("body_name", "Body1")
+    return {
+        "body_name": body,
+        "count": 12,
+        "edges": [
+            {
+                "index": 0,
+                "token": "tok_edge_0",
+                "body_name": body,
+                "geometry_type": "line",
+                "length": 50.0,
+                "start": [0.0, 0.0, 0.0],
+                "end": [50.0, 0.0, 0.0],
+            }
+        ],
+    }
+
+
+def _list_profiles(p: dict) -> dict:
+    sketch = p.get("sketch_name", "Sketch1")
+    return {
+        "sketch_name": sketch,
+        "count": 1,
+        "profiles": [
+            {
+                "index": 0,
+                "token": "tok_profile_0",
+                "sketch_name": sketch,
+                "area": 1500.0,
+                "centroid": [25.0, 15.0, 0.0],
+            }
+        ],
+    }
+
+
+def _list_sketch_curves(p: dict) -> dict:
+    sketch = p.get("sketch_name", "Sketch1")
+    return {
+        "sketch_name": sketch,
+        "count": 4,
+        "curves": [
+            {
+                "index": 0,
+                "token": "tok_curve_0",
+                "sketch_name": sketch,
+                "type": "line",
+                "is_construction": False,
+                "length": 50.0,
+            }
+        ],
+    }
+
+
+def _list_timeline(_p: dict) -> dict:
+    return {
+        "count": 2,
+        "timeline": [
+            {
+                "index": 0,
+                "name": "Sketch1",
+                "type": "Sketch",
+                "is_suppressed": False,
+                "is_rolled_back": False,
+            },
+            {
+                "index": 1,
+                "name": "Extrude1",
+                "type": "ExtrudeFeature",
+                "is_suppressed": False,
+                "is_rolled_back": False,
+            },
+        ],
+    }
+
+
+def _import_step(p: dict) -> dict:
+    return {
+        "imported": True,
+        "file_path": p.get("file_path", "/tmp/part.step"),
+        "component": p.get("component_name", "RootComponent"),
+        "body_count": 1,
+        "bodies": ["Body1"],
+    }
 
 
 def _undo(_p: dict) -> dict:
@@ -733,7 +898,7 @@ def _compare_meshes(p: dict) -> dict:
         "mean_abs_deviation": 0.001,
         "rms_deviation": 0.0015,
         "max_abs_deviation": 0.006,
-        "units": "cm",
+        "units": "mm",
     }
 
 
@@ -998,6 +1163,11 @@ _DISPATCH: dict[str, Any] = {
     "get_scene_info": _get_scene_info,
     "get_object_info": _get_object_info,
     "get_bounding_box": _get_bounding_box,
+    "list_faces": _list_faces,
+    "list_edges": _list_edges,
+    "list_profiles": _list_profiles,
+    "list_sketch_curves": _list_sketch_curves,
+    "list_timeline": _list_timeline,
     "create_sketch": _create_sketch,
     "draw_rectangle": _draw_rectangle,
     "draw_circle": _draw_circle,
@@ -1013,6 +1183,10 @@ _DISPATCH: dict[str, Any] = {
     "export_stl": _export_stl,
     "boolean_operation": _boolean_operation,
     "delete_all": _delete_all,
+    "delete_entity": _delete_entity,
+    "new_document": _new_document,
+    "open_document": _open_document,
+    "save_document": _save_document,
     "undo": _undo,
     "execute_code": _execute_code,
     "sweep": _sweep,
@@ -1030,6 +1204,7 @@ _DISPATCH: dict[str, Any] = {
     "export_view_sheet": _export_view_sheet,
     "export": _export,
     "import_mesh": _import_mesh,
+    "import_step": _import_step,
     "create_box_parametric": _create_box_parametric,
     "get_parameters": _get_parameters,
     "create_parameter": _create_parameter,

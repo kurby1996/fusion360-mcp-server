@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is an MCP server (93 tools) that connects AI coding agents to Autodesk Fusion 360 for CAD automation. It consists of two pieces:
+This is an MCP server (103 tools) that connects AI coding agents to Autodesk Fusion 360 for CAD automation. It consists of two pieces:
 
 1. **MCP Server** (this repo) — speaks MCP protocol over stdio, forwards commands to Fusion via TCP
 2. **Fusion 360 Add-in** — runs inside Fusion, executes commands on the main thread via CustomEvent bridge
@@ -16,23 +16,28 @@ Claude Code ──stdio──> MCP Server ──TCP :9876──> Fusion Add-in �
 
 The add-in uses a CustomEvent + work queue pattern to safely dispatch all Fusion API calls to the main thread. Socket threads submit work items and block on a per-item `threading.Event` until the main thread completes execution.
 
-## Available tools (93)
+## Available tools (103)
 
 ### Scene & Query
 | Tool | Description |
 |------|-------------|
 | `ping` | Health check (no Fusion API, instant) |
 | `get_scene_info` | Design name, bodies, sketches, features, camera |
-| `get_object_info` | Detailed info about a named body or sketch |
+| `get_object_info` | Detailed info about a named body or sketch (includes entityToken) |
 | `list_components` | List all components in the design |
+| `list_faces` | Faces of a body with token, type, area, normal |
+| `list_edges` | Edges of a body with token, type, length, endpoints |
+| `list_profiles` | Sketch profiles with token, area, centroid |
+| `list_sketch_curves` | Sketch curves with token, type, endpoints |
+| `list_timeline` | Timeline features with name, type, suppress/rollback |
 
 ### Sketching
 | Tool | Description |
 |------|-------------|
-| `create_sketch` | New sketch on xy/yz/xz, optional offset |
-| `draw_rectangle` | Rectangle in most recent sketch |
-| `draw_circle` | Circle in most recent sketch |
-| `draw_line` | Line in most recent sketch |
+| `create_sketch` | Sketch on xy/yz/xz, construction plane, or body face |
+| `draw_rectangle` | Rectangle in a named sketch (else most recent) |
+| `draw_circle` | Circle in a named sketch (else most recent) |
+| `draw_line` | Line in a named sketch (else most recent) |
 | `draw_arc` | Arc (center + start + sweep angle) |
 | `draw_spline` | Fit-point or control-point spline |
 | `create_polygon` | Regular polygon (3–64 sides) |
@@ -47,12 +52,12 @@ The add-in uses a CustomEvent + work queue pattern to safely dispatch all Fusion
 ### Features
 | Tool | Description |
 |------|-------------|
-| `extrude` | Extrude a sketch profile |
+| `extrude` | Extrude a profile (distance / through-all / to-object) |
 | `revolve` | Revolve a profile around an axis |
 | `sweep` | Sweep a profile along a path |
 | `loft` | Loft between two or more profiles |
-| `fillet` | Round edges (all/top/bottom/vertical) |
-| `chamfer` | Chamfer edges |
+| `fillet` | Round edges (`edge_tokens` or all/top/bottom/vertical) |
+| `chamfer` | Chamfer edges (`edge_tokens` or coarse selection) |
 | `shell` | Hollow out a body |
 | `mirror` | Mirror a body across a plane |
 | `create_hole` | Hole feature on a body face |
@@ -73,7 +78,11 @@ The add-in uses a CustomEvent + work queue pattern to safely dispatch all Fusion
 | `move_body` | Translate a body by (x, y, z) |
 | `boolean_operation` | Join/cut/intersect two bodies |
 | `delete_all` | Clear the design |
+| `delete_entity` | Delete one body, sketch, feature, or construction entity |
 | `undo` | Undo last operation |
+| `new_document` | Create a new empty Fusion design |
+| `open_document` | Open a local .f3d/.step/.iges/.sat as a new document |
+| `save_document` | Save to Fusion Team or write a local .f3d |
 
 ### Direct Primitives
 | Tool | Description |
@@ -135,9 +144,11 @@ The add-in uses a CustomEvent + work queue pattern to safely dispatch all Fusion
 | `set_parameter` | Update a parameter value |
 | `delete_parameter` | Remove a parameter |
 
-### Export
+### Import / Export
 | Tool | Description |
 |------|-------------|
+| `import_mesh` | Import STL/OBJ/3MF as mesh body |
+| `import_step` | Import STEP/STP as BRep bodies |
 | `export_stl` | Export body as STL |
 | `export_step` | Export body as STEP |
 | `export_f3d` | Export design as Fusion archive |
@@ -197,7 +208,7 @@ Every tool call returns a dict-shaped result with these conventions — read the
 }
 ```
 
-Known `error_kind` values: `PROFILE_NOT_CLOSED`, `SKETCH_NOT_FOUND`, `BODY_NOT_FOUND`, `SELF_INTERSECTION`, `REGEN_FAILED`, `BOOLEAN_NO_OP`, `INVALID_INPUT`, `NO_ACTIVE_DESIGN`, `DESIGN_TYPE_MISMATCH`, `TIMEOUT`, `UNKNOWN_COMMAND`, `UNKNOWN`.
+Known `error_kind` values: `PROFILE_NOT_CLOSED`, `SKETCH_NOT_FOUND`, `BODY_NOT_FOUND`, `ENTITY_NOT_FOUND`, `FEATURE_NOT_FOUND`, `FILE_NOT_FOUND`, `SELF_INTERSECTION`, `REGEN_FAILED`, `BOOLEAN_NO_OP`, `INVALID_INPUT`, `NO_ACTIVE_DESIGN`, `DESIGN_TYPE_MISMATCH`, `TIMEOUT`, `UNKNOWN_COMMAND`, `UNKNOWN`.
 
 **Use the deltas to sanity-check without a render.** A `boolean_operation` that reports `body_count_delta: 0, mass_g_delta: 0` did nothing — follow up with `check_interference` before retrying. An `extrude` that shifts mass by three orders of magnitude is probably using the wrong units.
 
@@ -217,9 +228,10 @@ Known `error_kind` values: `PROFILE_NOT_CLOSED`, `SKETCH_NOT_FOUND`, `BODY_NOT_F
 - **One operation per tool call.** Never batch multiple operations — Fusion's API is not thread-safe and complex scripts crash the add-in.
 - **No loops inside execute_code.** If you need to create 3 similar features, make 3 separate tool calls.
 - **Keep execute_code under ~15 lines.** Prefer the dedicated tools over execute_code whenever possible.
-- **Units are centimeters.** Fusion's internal API uses cm, not mm.
+- **Units are millimetres.** Every length you pass or receive is mm. The add-in converts to Fusion's internal centimetres. `execute_code` is the exception — it runs raw Fusion Python, so lengths there are still cm. String expressions like `"56 mm"` keep the unit you write.
 - **30-second timeout.** Commands that take longer than 30s will return a timeout error.
 - **body_name preferred over body_index.** Use named lookups when possible.
+- **Prefer entityToken for faces/edges/profiles.** Call `list_faces` / `list_edges` / `list_profiles` and pass tokens. Tokens go stale after any timeline edit — re-list before reuse.
 - **Verify after each step.** Call `get_scene_info` or `get_object_info` to confirm success — don't assume from lack of error.
 - **Name everything.** Name every body and sketch explicitly so they can be referenced reliably in later steps.
 

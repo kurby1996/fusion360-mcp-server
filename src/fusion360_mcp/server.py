@@ -348,17 +348,17 @@ def main(mode: str, host: str, port: int) -> int:
             arguments=[
                 types.PromptArgument(
                     name="length",
-                    description="Box length in cm",
+                    description="Box length in mm",
                     required=False,
                 ),
                 types.PromptArgument(
                     name="width",
-                    description="Box width in cm",
+                    description="Box width in mm",
                     required=False,
                 ),
                 types.PromptArgument(
                     name="height",
-                    description="Box height in cm",
+                    description="Box height in mm",
                     required=False,
                 ),
             ],
@@ -382,17 +382,17 @@ def main(mode: str, host: str, port: int) -> int:
             arguments=[
                 types.PromptArgument(
                     name="length",
-                    description="Enclosure length in cm",
+                    description="Enclosure length in mm",
                     required=False,
                 ),
                 types.PromptArgument(
                     name="width",
-                    description="Enclosure width in cm",
+                    description="Enclosure width in mm",
                     required=False,
                 ),
                 types.PromptArgument(
                     name="height",
-                    description="Enclosure height in cm",
+                    description="Enclosure height in mm",
                     required=False,
                 ),
             ],
@@ -441,7 +441,7 @@ def main(mode: str, host: str, port: int) -> int:
             height = args.get("height", "5")
             text = (
                 f"Create a sheet metal enclosure "
-                f"({length}x{width}x{height} cm):\n"
+                f"({length}x{width}x{height} mm):\n"
                 f"1. create_sketch on xy plane\n"
                 f"2. draw_rectangle {width}x{length}\n"
                 f"3. extrude to sheet thickness\n"

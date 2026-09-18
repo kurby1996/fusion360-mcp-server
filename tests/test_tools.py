@@ -64,6 +64,11 @@ def test_expected_tools_present():
         "get_scene_info",
         "get_object_info",
         "get_bounding_box",
+        "list_faces",
+        "list_edges",
+        "list_profiles",
+        "list_sketch_curves",
+        "list_timeline",
         # sketch
         "create_sketch",
         "draw_rectangle",
@@ -82,6 +87,10 @@ def test_expected_tools_present():
         "boolean_operation",
         # scene control
         "delete_all",
+        "delete_entity",
+        "new_document",
+        "open_document",
+        "save_document",
         "undo",
         # code execution
         "execute_code",
@@ -106,6 +115,7 @@ def test_expected_tools_present():
         "export",
         # import
         "import_mesh",
+        "import_step",
         # parameters
         "get_parameters",
         "create_parameter",

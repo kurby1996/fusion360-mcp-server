@@ -89,6 +89,18 @@ class TestDeleteAll:
         )
 
 
+class TestDeleteEntity:
+    def test_calls_delete_me(self):
+        node = _method("delete_entity")
+        assert "deleteMe" in _called_attrs(node), (
+            "delete_entity must call deleteMe() on the resolved entity"
+        )
+
+    def test_does_not_swallow_failures(self):
+        node = _method("delete_entity")
+        assert not _has_silent_except(node)
+
+
 class TestCheckInterference:
     def test_uses_the_design_level_api(self):
         """Component.interfere() does not exist; the API is on Design."""

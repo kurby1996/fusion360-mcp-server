@@ -73,6 +73,61 @@ class TestMockSceneQuery:
         assert "body_name" in result
         assert "sketch_name" in result
 
+    def test_list_faces(self):
+        result = mock_command("list_faces", {"body_name": "Box"})
+        assert result["body_name"] == "Box"
+        assert result["count"] >= 1
+        assert result["faces"][0]["token"]
+        assert result["faces"][0]["geometry_type"]
+
+    def test_list_edges(self):
+        result = mock_command("list_edges", {"body_name": "Box"})
+        assert result["edges"][0]["token"]
+        assert result["count"] >= 1
+
+    def test_list_profiles(self):
+        result = mock_command("list_profiles", {"sketch_name": "Sketch1"})
+        assert result["sketch_name"] == "Sketch1"
+        assert result["profiles"][0]["token"]
+
+    def test_list_sketch_curves(self):
+        result = mock_command("list_sketch_curves", {"sketch_name": "Sketch1"})
+        assert result["curves"][0]["token"]
+
+    def test_list_timeline(self):
+        result = mock_command("list_timeline")
+        assert result["count"] >= 1
+        assert result["timeline"][0]["name"]
+
+    def test_delete_entity(self):
+        result = mock_command(
+            "delete_entity", {"entity_type": "body", "name": "Body1"}
+        )
+        assert result["deleted"] is True
+        assert result["name"] == "Body1"
+        assert "deltas" in result
+
+    def test_new_document(self):
+        result = mock_command("new_document", {"name": "PartA"})
+        assert result["created"] is True
+        assert result["requested_name"] == "PartA"
+
+    def test_open_document(self):
+        result = mock_command("open_document", {"file_path": "/tmp/a.f3d"})
+        assert result["opened"] is True
+        assert result["file_path"] == "/tmp/a.f3d"
+
+    def test_save_document_local(self):
+        result = mock_command("save_document", {"file_path": "/tmp/a.f3d"})
+        assert result["saved"] is True
+        assert result["save_mode"] == "local_f3d"
+
+    def test_import_step(self):
+        result = mock_command("import_step", {"file_path": "/tmp/part.step"})
+        assert result["imported"] is True
+        assert result["file_path"] == "/tmp/part.step"
+        assert "deltas" in result
+
     def test_create_box_parametric_expression(self):
         result = mock_command("create_box_parametric", {
             "length": "boxL",
@@ -135,6 +190,16 @@ class TestMockFeatures:
         assert result["height"] == 3
         assert result["operation"] == "cut"
         assert "body_name" in result
+
+    def test_extrude_through_all(self):
+        result = mock_command("extrude", {"extent": "through_all"})
+        assert result["extent"] == "through_all"
+
+    def test_fillet_edge_tokens(self):
+        result = mock_command(
+            "fillet", {"radius": 0.2, "edge_tokens": ["tok_edge_0", "tok_edge_1"]}
+        )
+        assert result["edges_count"] == 2
 
     def test_revolve(self):
         result = mock_command("revolve", {"angle": 180})

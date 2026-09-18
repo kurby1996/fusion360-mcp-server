@@ -26,6 +26,9 @@ class TestHintClassification:
             ("Invalid input: angle must be > 0", "INVALID_INPUT"),
             ("Unknown command: bogus", "UNKNOWN_COMMAND"),
             ("Operation timeout after 30s", "TIMEOUT"),
+            ("Entity token not found: abc", "ENTITY_NOT_FOUND"),
+            ("Feature 'Extrude1' not found in timeline", "FEATURE_NOT_FOUND"),
+            ("STEP file not found: /tmp/missing.step", "FILE_NOT_FOUND"),
         ],
     )
     def test_classify_known_messages(self, msg, expected_kind):

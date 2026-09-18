@@ -50,6 +50,31 @@ _RULES: list[tuple[str, str, list[str]]] = [
         ],
     ),
     (
+        r"entity token not found|token is empty|token is not an",
+        "ENTITY_NOT_FOUND",
+        [
+            "The entityToken is missing, stale, or the wrong type.",
+            "Call list_faces / list_edges / list_profiles / list_sketch_curves "
+            "again after any mutation — tokens do not survive timeline edits.",
+        ],
+    ),
+    (
+        r"feature\b.*\bnot found",
+        "FEATURE_NOT_FOUND",
+        [
+            "The named feature is not in the timeline.",
+            "Call list_timeline to see current feature names.",
+        ],
+    ),
+    (
+        r"file not found|no such file",
+        "FILE_NOT_FOUND",
+        [
+            "The path does not exist on the Fusion host (not the MCP client).",
+            "Pass an absolute path that Fusion 360 can read.",
+        ],
+    ),
+    (
         r"self[- ]?intersect",
         "SELF_INTERSECTION",
         [
@@ -85,7 +110,7 @@ _RULES: list[tuple[str, str, list[str]]] = [
         "INVALID_INPUT",
         [
             "Fusion rejected one of the parameters.",
-            "Check units (all Fusion API values are in cm), enum values, and "
+            "Check units (lengths are millimetres), enum values, and "
             "that referenced entities still exist.",
         ],
     ),

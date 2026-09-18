@@ -1,6 +1,6 @@
 # Fusion360 MCP Server
 
-*Last updated: 2026-09-16*
+*Last updated: 2026-09-18*
 
 > **Beta** — This project is under active development. APIs and tool behavior may change between releases. Use at your own discretion. Feedback and bug reports welcome via [GitHub Issues](https://github.com/faust-machines/fusion360-mcp-server/issues).
 
@@ -123,7 +123,7 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 2. Stop the add-in in Fusion (Shift+S → Add-Ins → Fusion360MCP → Stop)
 3. Delete the add-in folder from Fusion's AddIns directory
 
-## Available Tools (93)
+## Available Tools (103)
 
 > Tools marked **(2026+)** require a recent Fusion build — they use APIs introduced in the January–July 2026 releases and are live-tested on Fusion 2705 (arm64).
 
@@ -132,9 +132,14 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 |------|-------------|
 | `ping` | Health check (instant, no Fusion API) |
 | `get_scene_info` | Design name, bodies, sketches, features, camera |
-| `get_object_info` | Detailed info about a named body or sketch |
+| `get_object_info` | Detailed info about a named body or sketch (includes entityToken) |
 | `get_bounding_box` | Axis-aligned bbox (min/max/size/center) for body or component; unions all bodies when called on a component |
 | `list_components` | List all components in the design |
+| `list_faces` | Faces of a body with token, geometry type, area, normal |
+| `list_edges` | Edges of a body with token, curve type, length, endpoints |
+| `list_profiles` | Sketch profiles with token, area, centroid |
+| `list_sketch_curves` | Sketch curves with token, type, endpoints |
+| `list_timeline` | Timeline features with name, type, suppress/rollback |
 
 ### Design Type Safety
 | Tool | Description |
@@ -145,10 +150,10 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 ### Sketching
 | Tool | Description |
 |------|-------------|
-| `create_sketch` | New sketch on xy/yz/xz plane, optional offset |
-| `draw_rectangle` | Rectangle in most recent sketch |
-| `draw_circle` | Circle in most recent sketch |
-| `draw_line` | Line in most recent sketch |
+| `create_sketch` | Sketch on xy/yz/xz, a construction plane, or a body face (`face_token`) |
+| `draw_rectangle` | Rectangle in a named sketch (else most recent) |
+| `draw_circle` | Circle in a named sketch (else most recent) |
+| `draw_line` | Line in a named sketch (else most recent) |
 | `draw_arc` | Arc (center + start + sweep angle) |
 | `draw_spline` | Fit-point or control-point spline |
 | `create_polygon` | Regular polygon (3–64 sides) |
@@ -163,12 +168,12 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 ### Features
 | Tool | Description |
 |------|-------------|
-| `extrude` | Extrude a sketch profile |
+| `extrude` | Extrude a profile — `distance` / `through_all` / `to_object` |
 | `revolve` | Revolve a profile around an axis |
 | `sweep` | Sweep a profile along a path |
 | `loft` | Loft between two or more profiles |
-| `fillet` | Round edges (all/top/bottom/vertical) |
-| `chamfer` | Chamfer edges |
+| `fillet` | Round edges (`edge_tokens` from `list_edges`, or all/top/bottom/vertical) |
+| `chamfer` | Chamfer edges (`edge_tokens` or coarse selection) |
 | `shell` | Hollow out a body |
 | `mirror` | Mirror a body across a plane |
 | `create_hole` | Hole feature on a body face |
@@ -190,13 +195,17 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 | `rename_body` | Rename a body (searches root and all components) |
 | `boolean_operation` | Join/cut/intersect two bodies |
 | `delete_all` | Clear the design |
+| `delete_entity` | Delete one body, sketch, feature, or construction entity |
 | `undo` | Undo last operation (with design-type safety guard) |
+| `new_document` | Create a new empty Fusion design |
+| `open_document` | Open a local .f3d/.step/.iges/.sat as a new document |
+| `save_document` | Save to Fusion Team, or write a local .f3d via `file_path` |
 
 ### Direct Primitives
 | Tool | Description |
 |------|-------------|
 | `create_box` | Box (via TemporaryBRepManager, history-less) |
-| `create_box_parametric` | History-based box: sketch rectangle + dimensions + extrude. `length`/`width`/`height` accept numbers (cm) or string expressions referencing User Parameters (e.g. `"boxL"`, `"outer - 2*wall_t"`) |
+| `create_box_parametric` | History-based box: sketch rectangle + dimensions + extrude. `length`/`width`/`height` accept numbers (mm) or string expressions referencing User Parameters (e.g. `"boxL"`, `"outer - 2*wall_t"`) |
 | `create_cylinder` | Cylinder |
 | `create_sphere` | Sphere |
 | `create_torus` | Torus |
@@ -241,7 +250,7 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 | `get_physical_properties` | Mass, volume, area, center of mass |
 | `create_section_analysis` | Section plane through model |
 | `check_interference` | Detect collisions between components |
-| `compare_meshes` | **(2026+)** Deviation statistics between two mesh bodies (min/max/mean/RMS, cm) — e.g. validate against a reference STL |
+| `compare_meshes` | **(2026+)** Deviation statistics between two mesh bodies (min/max/mean/RMS, mm) — e.g. validate against a reference STL |
 
 ### Appearance
 | Tool | Description |
@@ -261,6 +270,7 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 | Tool | Description |
 |------|-------------|
 | `import_mesh` | Import STL/OBJ/3MF as mesh body via `MeshBodies.add()`. Unit-aware (`mm`/`cm`/`m`/`in`/`ft`). Returns the mesh name and bounding box |
+| `import_step` | Import STEP/STP as BRep bodies into the active design |
 | `export_stl` | Export body as STL (supports bodies inside components) |
 | `export_step` | Export body as STEP (supports bodies inside components) |
 | `export_f3d` | Export design as Fusion archive |
@@ -301,13 +311,13 @@ Call the `ping` tool from your client. If it returns `{"ok": true, "status": "po
 
 ```bash
 uv sync --dev       # install deps
-uv run pytest -v    # run tests (363 tests)
+uv run pytest -v    # run tests (390 tests)
 uv run ruff check   # lint
 ```
 
 ## Notes
 
-- All Fusion API units are **centimeters** (Fusion's internal unit).
+- All length values on the MCP tools are **millimetres**. The add-in converts to Fusion's internal centimetres. `execute_code` still uses centimetres (raw Fusion API).
 - One operation per tool call. Batching multiple operations crashes the add-in.
 - Timeouts: the add-in's main-thread bridge times out after 30s and *cancels* the queued command; the client waits up to 45s so it receives that structured `TIMEOUT` error. **Mutation commands are never auto-retried** — after a timeout, call `get_scene_info` to check whether anything was applied before retrying.
 - Add-in logs to `~/fusion360mcp.log`.

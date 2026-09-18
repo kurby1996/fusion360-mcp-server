@@ -24,6 +24,7 @@ from . import get_logger
 from . import hints as _hints
 from . import hole_geometry as _hole_geom
 from . import parameter_units as _param_units
+from . import units as _units
 
 log = get_logger("handler")
 
@@ -109,6 +110,8 @@ class CommandHandler:
             # construction geometry / appearance
             "create_ucs",
             "set_color",
+            "delete_entity",
+            "import_step",
         }
     )
 
@@ -121,6 +124,11 @@ class CommandHandler:
                 "get_object_info": self.get_object_info,
                 "get_bounding_box": self.get_bounding_box,
                 "list_components": self.list_components,
+                "list_faces": self.list_faces,
+                "list_edges": self.list_edges,
+                "list_profiles": self.list_profiles,
+                "list_sketch_curves": self.list_sketch_curves,
+                "list_timeline": self.list_timeline,
                 # sketch
                 "create_sketch": self.create_sketch,
                 "draw_rectangle": self.draw_rectangle,
@@ -165,10 +173,15 @@ class CommandHandler:
                 "export_view_sheet": self.export_view_sheet,
                 "export": self.export,
                 "import_mesh": self.import_mesh,
+                "import_step": self.import_step,
                 "create_box_parametric": self.create_box_parametric,
                 "boolean_operation": self.boolean_operation,
                 "delete_all": self.delete_all,
+                "delete_entity": self.delete_entity,
                 "undo": self.undo,
+                "new_document": self.new_document,
+                "open_document": self.open_document,
+                "save_document": self.save_document,
                 # direct primitives
                 "create_box": self.create_box,
                 "create_cylinder": self.create_cylinder,
@@ -229,7 +242,7 @@ class CommandHandler:
             }
 
         cmd_type = command.get("type")
-        params = command.get("params", {})
+        params = _units.to_internal(cmd_type, command.get("params") or {})
 
         handler = self._COMMANDS.get(cmd_type)
         if handler is None:
@@ -272,6 +285,7 @@ class CommandHandler:
             if snap_after is not None:
                 result["deltas"] = self._compute_deltas(snap_before, snap_after)
 
+        result = _units.to_external(cmd_type, result)
         return {"status": "success", "result": result}
 
     # ------------------------------------------------------------------
@@ -451,6 +465,235 @@ class CommandHandler:
             raise RuntimeError(f"No faces matched selection '{selection}'")
         return coll
 
+    def _resolve_sketch(self, sketch_name=None):
+        if sketch_name:
+            return self._sketch_by_name(sketch_name)
+        return self._last_sketch()
+
+    def _token_of(self, entity):
+        try:
+            return entity.entityToken
+        except Exception:
+            return None
+
+    @staticmethod
+    def _xyz(pt):
+        if pt is None:
+            return None
+        return [pt.x, pt.y, pt.z]
+
+    def _entities_by_token(self, token: str):
+        if not token:
+            raise RuntimeError("Entity token is empty")
+        found = self._design().findEntityByToken(token)
+        items = []
+        if found is None:
+            items = []
+        elif hasattr(found, "count") and hasattr(found, "item"):
+            items = [found.item(i) for i in range(found.count)]
+        elif isinstance(found, (list, tuple)):
+            items = [e for e in found if e is not None]
+        else:
+            items = [found]
+        if not items:
+            raise RuntimeError(f"Entity token not found: {token}")
+        return items
+
+    def _entity_by_token(self, token: str):
+        return self._entities_by_token(token)[0]
+
+    def _cast_edge(self, entity):
+        edge = adsk.fusion.BRepEdge.cast(entity)
+        if edge is None:
+            raise RuntimeError("Token is not an edge")
+        return edge
+
+    def _cast_face(self, entity):
+        face = adsk.fusion.BRepFace.cast(entity)
+        if face is None:
+            raise RuntimeError("Token is not a face")
+        return face
+
+    def _cast_profile(self, entity):
+        profile = adsk.fusion.Profile.cast(entity)
+        if profile is None:
+            raise RuntimeError("Token is not a sketch profile")
+        return profile
+
+    def _edges_from_tokens(self, edge_tokens: list):
+        coll = adsk.core.ObjectCollection.create()
+        for tok in edge_tokens:
+            coll.add(self._cast_edge(self._entity_by_token(tok)))
+        if coll.count == 0:
+            raise RuntimeError("No edges resolved from edge_tokens")
+        return coll
+
+    def _plane_by_name(self, name: str):
+        root = self._root()
+        for i in range(root.constructionPlanes.count):
+            p = root.constructionPlanes.item(i)
+            if p.name == name:
+                return p
+        raise RuntimeError(f"Construction plane '{name}' not found")
+
+    def _axis_by_name(self, name: str):
+        root = self._root()
+        for i in range(root.constructionAxes.count):
+            a = root.constructionAxes.item(i)
+            if a.name == name:
+                return a
+        raise RuntimeError(f"Construction axis '{name}' not found")
+
+    def _feature_by_name(self, name: str):
+        design = self._design()
+        for i in range(design.timeline.count):
+            item = design.timeline.item(i)
+            ent = getattr(item, "entity", None)
+            if ent is not None and getattr(ent, "name", None) == name:
+                return ent
+        raise RuntimeError(f"Feature '{name}' not found in timeline")
+
+    @staticmethod
+    def _surface_kind(geom):
+        if geom is None:
+            return "unknown"
+        if adsk.core.Plane.cast(geom):
+            return "plane"
+        if adsk.core.Cylinder.cast(geom):
+            return "cylinder"
+        if adsk.core.Cone.cast(geom):
+            return "cone"
+        if adsk.core.Sphere.cast(geom):
+            return "sphere"
+        if adsk.core.Torus.cast(geom):
+            return "torus"
+        elliptical_cone = getattr(adsk.core, "EllipticalCone", None)
+        if elliptical_cone is not None and elliptical_cone.cast(geom):
+            return "elliptical_cone"
+        elliptical_cyl = getattr(adsk.core, "EllipticalCylinder", None)
+        if elliptical_cyl is not None and elliptical_cyl.cast(geom):
+            return "elliptical_cylinder"
+        if adsk.core.NurbsSurface.cast(geom):
+            return "nurbs"
+        return type(geom).__name__
+
+    @staticmethod
+    def _curve_kind(geom):
+        if geom is None:
+            return "unknown"
+        if adsk.core.Line3D.cast(geom):
+            return "line"
+        if adsk.core.Circle3D.cast(geom):
+            return "circle"
+        if adsk.core.Arc3D.cast(geom):
+            return "arc"
+        elliptical_arc = getattr(adsk.core, "EllipticalArc3D", None)
+        if elliptical_arc is not None and elliptical_arc.cast(geom):
+            return "elliptical_arc"
+        if adsk.core.InfiniteLine3D.cast(geom):
+            return "infinite_line"
+        if adsk.core.NurbsCurve3D.cast(geom):
+            return "nurbs"
+        return type(geom).__name__
+
+    @staticmethod
+    def _sketch_curve_kind(curve):
+        mapping = (
+            ("SketchLine", "line"),
+            ("SketchCircle", "circle"),
+            ("SketchArc", "arc"),
+            ("SketchEllipse", "ellipse"),
+            ("SketchEllipticalArc", "elliptical_arc"),
+            ("SketchFittedSpline", "fitted_spline"),
+            ("SketchControlPointSpline", "control_point_spline"),
+            ("SketchConicCurve", "conic"),
+        )
+        for cls_name, kind in mapping:
+            cls = getattr(adsk.fusion, cls_name, None)
+            if cls is not None and cls.cast(curve):
+                return kind
+        return type(curve).__name__
+
+    def _curve_ends(self, geom):
+        if geom is None:
+            return None, None
+        sp = getattr(geom, "startPoint", None)
+        ep = getattr(geom, "endPoint", None)
+        if sp is not None and ep is not None:
+            return self._xyz(sp), self._xyz(ep)
+        try:
+            ok, start, end = geom.evaluator.getEndPoints()
+            if ok:
+                return self._xyz(start), self._xyz(end)
+        except Exception:
+            pass
+        return None, None
+
+    def _face_info(self, face, index, body_name):
+        geom = face.geometry
+        kind = self._surface_kind(geom)
+        info = {
+            "index": index,
+            "token": self._token_of(face),
+            "body_name": body_name,
+            "geometry_type": kind,
+            "area": face.area,
+            "point_on_face": self._xyz(face.pointOnFace),
+        }
+        try:
+            ok, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
+            if ok:
+                info["normal"] = self._xyz(normal)
+        except Exception:
+            pass
+        try:
+            info["bounding_box"] = self._bbox_dict(face.boundingBox)
+        except Exception:
+            pass
+        if geom is None:
+            return info
+        if kind == "plane":
+            info["origin"] = self._xyz(geom.origin)
+        elif kind == "cylinder":
+            info["origin"] = self._xyz(geom.origin)
+            info["axis"] = self._xyz(geom.axis)
+            info["radius"] = geom.radius
+        elif kind == "sphere":
+            info["origin"] = self._xyz(geom.origin)
+            info["radius"] = geom.radius
+        elif kind == "cone":
+            info["origin"] = self._xyz(geom.origin)
+            info["axis"] = self._xyz(geom.axis)
+            info["radius"] = getattr(geom, "radius", None)
+            info["half_angle"] = getattr(geom, "halfAngle", None)
+        elif kind == "torus":
+            info["origin"] = self._xyz(geom.origin)
+            info["axis"] = self._xyz(geom.axis)
+            info["major_radius"] = getattr(geom, "majorRadius", None)
+            info["minor_radius"] = getattr(geom, "minorRadius", None)
+        return info
+
+    def _edge_info(self, edge, index, body_name):
+        geom = edge.geometry
+        kind = self._curve_kind(geom)
+        start, end = self._curve_ends(geom)
+        info = {
+            "index": index,
+            "token": self._token_of(edge),
+            "body_name": body_name,
+            "geometry_type": kind,
+            "length": edge.length,
+            "start": start,
+            "end": end,
+            "point_on_edge": self._xyz(edge.pointOnEdge),
+        }
+        if kind in ("circle", "arc") and geom is not None:
+            info["radius"] = getattr(geom, "radius", None)
+            center = getattr(geom, "center", None)
+            if center is not None:
+                info["center"] = self._xyz(center)
+        return info
+
     # ------------------------------------------------------------------
     # Scene / Query
     # ------------------------------------------------------------------
@@ -465,10 +708,13 @@ class CommandHandler:
             bodies.append(
                 {
                     "name": b.name,
+                    "token": self._token_of(b),
                     "volume": b.volume,
                     "area": b.area,
                     "material": b.material.name if b.material else None,
                     "is_visible": b.isVisible,
+                    "faces_count": b.faces.count,
+                    "edges_count": b.edges.count,
                 }
             )
 
@@ -478,22 +724,43 @@ class CommandHandler:
             sketches.append(
                 {
                     "name": s.name,
+                    "token": self._token_of(s),
                     "profile_count": s.profiles.count,
+                    "curve_count": s.sketchCurves.count,
                     "is_visible": s.isVisible,
                 }
             )
+
+        features = []
+        timeline_count = 0
+        try:
+            timeline = design.timeline
+            timeline_count = timeline.count
+            for i in range(timeline.count):
+                item = timeline.item(i)
+                ent = getattr(item, "entity", None)
+                features.append(
+                    {
+                        "index": i,
+                        "name": getattr(ent, "name", None) if ent else None,
+                        "type": type(ent).__name__ if ent else None,
+                        "is_suppressed": bool(getattr(item, "isSuppressed", False)),
+                        "is_rolled_back": bool(getattr(item, "isRolledBack", False)),
+                    }
+                )
+        except Exception:
+            pass
 
         return {
             "design_name": design.parentDocument.name,
             "design_type": design.productType,
             "bodies": bodies,
             "sketches": sketches,
+            "features": features,
             "bodies_count": root.bRepBodies.count,
             "sketches_count": root.sketches.count,
             "features_count": root.features.count,
-            "timeline_count": (
-                design.timeline.count if hasattr(design, "timeline") else 0
-            ),
+            "timeline_count": timeline_count,
             "camera": self._camera_info(),
         }
 
@@ -508,6 +775,7 @@ class CommandHandler:
                     "found": True,
                     "type": "body",
                     "name": name,
+                    "token": self._token_of(b),
                     "volume": b.volume,
                     "area": b.area,
                     "material": b.material.name if b.material else None,
@@ -526,6 +794,7 @@ class CommandHandler:
                     "found": True,
                     "type": "sketch",
                     "name": name,
+                    "token": self._token_of(s),
                     "is_visible": s.isVisible,
                     "profile_count": s.profiles.count,
                     "curve_count": s.sketchCurves.count,
@@ -547,7 +816,7 @@ class CommandHandler:
         return {"components": components, "count": len(components)}
 
     def get_bounding_box(self, name: str):
-        """Axis-aligned bounding box for a body or component. Values in cm."""
+        """Axis-aligned bounding box for a body or component. Values in mm."""
 
         def _payload(obj_type, mn, mx):
             return {
@@ -601,25 +870,166 @@ class CommandHandler:
 
         return _payload("component", mn, mx)
 
+    def list_faces(self, body_name: str):
+        body = self._body_by_name(body_name)
+        faces = [
+            self._face_info(body.faces.item(i), i, body.name)
+            for i in range(body.faces.count)
+        ]
+        return {"body_name": body.name, "count": len(faces), "faces": faces}
+
+    def list_edges(self, body_name: str):
+        body = self._body_by_name(body_name)
+        edges = [
+            self._edge_info(body.edges.item(i), i, body.name)
+            for i in range(body.edges.count)
+        ]
+        return {"body_name": body.name, "count": len(edges), "edges": edges}
+
+    def list_profiles(self, sketch_name: str = None):
+        sketch = self._resolve_sketch(sketch_name)
+        profiles = []
+        for i in range(sketch.profiles.count):
+            profile = sketch.profiles.item(i)
+            info = {
+                "index": i,
+                "token": self._token_of(profile),
+                "sketch_name": sketch.name,
+            }
+            try:
+                props = profile.areaProperties()
+                info["area"] = props.area
+                info["centroid"] = self._xyz(props.centroid)
+            except Exception:
+                info["area"] = None
+                info["centroid"] = None
+            try:
+                info["bounding_box"] = self._bbox_dict(profile.boundingBox)
+            except Exception:
+                pass
+            try:
+                info["loop_count"] = profile.profileLoops.count
+            except Exception:
+                info["loop_count"] = None
+            profiles.append(info)
+        return {
+            "sketch_name": sketch.name,
+            "count": len(profiles),
+            "profiles": profiles,
+        }
+
+    def list_sketch_curves(self, sketch_name: str = None):
+        sketch = self._resolve_sketch(sketch_name)
+        curves = []
+        for i in range(sketch.sketchCurves.count):
+            curve = sketch.sketchCurves.item(i)
+            geom = getattr(curve, "geometry", None)
+            start, end = self._curve_ends(geom)
+            info = {
+                "index": i,
+                "token": self._token_of(curve),
+                "sketch_name": sketch.name,
+                "type": self._sketch_curve_kind(curve),
+                "is_construction": bool(getattr(curve, "isConstruction", False)),
+                "is_reference": bool(getattr(curve, "isReference", False)),
+                "start": start,
+                "end": end,
+            }
+            try:
+                info["length"] = curve.length
+            except Exception:
+                info["length"] = None
+            if info["type"] == "circle":
+                circle = adsk.fusion.SketchCircle.cast(curve)
+                if circle is not None:
+                    info["radius"] = circle.radius
+                    info["center"] = self._xyz(circle.centerSketchPoint.geometry)
+            elif info["type"] == "arc":
+                arc = adsk.fusion.SketchArc.cast(curve)
+                if arc is not None:
+                    info["radius"] = arc.radius
+                    info["center"] = self._xyz(arc.centerSketchPoint.geometry)
+            curves.append(info)
+        return {
+            "sketch_name": sketch.name,
+            "count": len(curves),
+            "curves": curves,
+        }
+
+    def list_timeline(self):
+        design = self._design()
+        items = []
+        timeline = design.timeline
+        for i in range(timeline.count):
+            item = timeline.item(i)
+            ent = getattr(item, "entity", None)
+            entry = {
+                "index": i,
+                "name": getattr(ent, "name", None) if ent else None,
+                "type": type(ent).__name__ if ent else None,
+                "token": self._token_of(ent) if ent else None,
+                "is_suppressed": bool(getattr(item, "isSuppressed", False)),
+                "is_rolled_back": bool(getattr(item, "isRolledBack", False)),
+            }
+            health = getattr(ent, "healthState", None)
+            if health is not None:
+                entry["health_state"] = int(health)
+            items.append(entry)
+        return {"count": len(items), "timeline": items}
+
     # ------------------------------------------------------------------
     # Sketch
     # ------------------------------------------------------------------
 
-    def create_sketch(self, plane: str = "xy", z_offset: float = None):
+    def create_sketch(
+        self,
+        plane: str = "xy",
+        z_offset: float = None,
+        face_token: str = None,
+        plane_name: str = None,
+        body_name: str = None,
+        face_index: int = None,
+        name: str = None,
+    ):
         root = self._root()
+        source = "plane"
 
-        if z_offset is not None and z_offset != 0:
-            # Create an offset construction plane
+        if face_token:
+            sketch_plane = self._cast_face(self._entity_by_token(face_token))
+            source = "face_token"
+        elif body_name is not None and face_index is not None:
+            body = self._body_by_name(body_name)
+            if face_index < 0 or face_index >= body.faces.count:
+                raise RuntimeError(
+                    f"face_index {face_index} out of range "
+                    f"(body '{body.name}' has {body.faces.count} faces)"
+                )
+            sketch_plane = body.faces.item(face_index)
+            source = "face_index"
+        elif plane_name:
+            sketch_plane = self._plane_by_name(plane_name)
+            source = "plane_name"
+        elif z_offset is not None and z_offset != 0:
             planes = root.constructionPlanes
             plane_input = planes.createInput()
             offset_val = adsk.core.ValueInput.createByReal(z_offset)
             plane_input.setByOffset(self._construction_plane(plane), offset_val)
-            cp = planes.add(plane_input)
-            sketch = root.sketches.add(cp)
+            sketch_plane = planes.add(plane_input)
+            source = "offset_plane"
         else:
-            sketch = root.sketches.add(self._construction_plane(plane))
+            sketch_plane = self._construction_plane(plane)
 
-        return {"sketch_name": sketch.name, "plane": plane, "z_offset": z_offset}
+        sketch = root.sketches.add(sketch_plane)
+        if name:
+            sketch.name = name
+
+        return {
+            "sketch_name": sketch.name,
+            "plane": plane,
+            "z_offset": z_offset,
+            "source": source,
+            "token": self._token_of(sketch),
+        }
 
     def draw_rectangle(
         self,
@@ -628,8 +1038,9 @@ class CommandHandler:
         origin_x: float = 0,
         origin_y: float = 0,
         origin_z: float = 0,
+        sketch_name: str = None,
     ):
-        sketch = self._last_sketch()
+        sketch = self._resolve_sketch(sketch_name)
         p1 = adsk.core.Point3D.create(origin_x, origin_y, origin_z)
         p2 = adsk.core.Point3D.create(origin_x + width, origin_y + height, origin_z)
         sketch.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
@@ -641,8 +1052,9 @@ class CommandHandler:
         center_x: float = 0,
         center_y: float = 0,
         center_z: float = 0,
+        sketch_name: str = None,
     ):
-        sketch = self._last_sketch()
+        sketch = self._resolve_sketch(sketch_name)
         c = adsk.core.Point3D.create(center_x, center_y, center_z)
         sketch.sketchCurves.sketchCircles.addByCenterRadius(c, radius)
         return {
@@ -659,8 +1071,9 @@ class CommandHandler:
         end_y: float,
         start_z: float = 0,
         end_z: float = 0,
+        sketch_name: str = None,
     ):
-        sketch = self._last_sketch()
+        sketch = self._resolve_sketch(sketch_name)
         sp = adsk.core.Point3D.create(start_x, start_y, start_z)
         ep = adsk.core.Point3D.create(end_x, end_y, end_z)
         sketch.sketchCurves.sketchLines.addByTwoPoints(sp, ep)
@@ -679,16 +1092,19 @@ class CommandHandler:
         sweep_angle: float,
         center_z: float = 0,
         start_z: float = 0,
+        sketch_name: str = None,
     ):
-        sketch = self._last_sketch()
+        sketch = self._resolve_sketch(sketch_name)
         center = adsk.core.Point3D.create(center_x, center_y, center_z)
         start = adsk.core.Point3D.create(start_x, start_y, start_z)
         sweep_rad = math.radians(sweep_angle)
         sketch.sketchCurves.sketchArcs.addByCenterStartSweep(center, start, sweep_rad)
         return {"sketch": sketch.name, "sweep_angle": sweep_angle}
 
-    def draw_spline(self, spline_type: str, points: list, degree: int = 3):
-        sketch = self._last_sketch()
+    def draw_spline(
+        self, spline_type: str, points: list, degree: int = 3, sketch_name: str = None
+    ):
+        sketch = self._resolve_sketch(sketch_name)
         pts = adsk.core.ObjectCollection.create()
         for p in points:
             z = p[2] if len(p) > 2 else 0
@@ -711,8 +1127,9 @@ class CommandHandler:
         center_x: float = 0,
         center_y: float = 0,
         center_z: float = 0,
+        sketch_name: str = None,
     ):
-        sketch = self._last_sketch()
+        sketch = self._resolve_sketch(sketch_name)
         # Draw inscribed polygon
         for i in range(sides):
             angle1 = 2 * math.pi * i / sides
@@ -938,24 +1355,58 @@ class CommandHandler:
 
     def extrude(
         self,
-        height: float,
+        height: float = None,
         profile_index: int = 0,
         operation: str = "new_body",
         direction: str = "positive",
+        sketch_name: str = None,
+        profile_token: str = None,
+        extent: str = "distance",
+        to_entity_token: str = None,
     ):
         root = self._root()
-        sketch = self._last_sketch()
-        if sketch.profiles.count == 0:
-            raise RuntimeError("No profiles in sketch")
-        profile = sketch.profiles.item(profile_index)
+        if profile_token:
+            profile = self._cast_profile(self._entity_by_token(profile_token))
+        else:
+            sketch = self._resolve_sketch(sketch_name)
+            if sketch.profiles.count == 0:
+                raise RuntimeError("No profiles in sketch")
+            profile = sketch.profiles.item(profile_index)
 
         ext_feats = root.features.extrudeFeatures
         ext_input = ext_feats.createInput(profile, self._operation_type(operation))
-        dist = adsk.core.ValueInput.createByReal(height)
-        if direction == "symmetric":
-            ext_input.setSymmetricExtent(dist, True)
+
+        extent_kind = (extent or "distance").lower()
+        if extent_kind in ("through_all", "all"):
+            dir_map = {
+                "positive": adsk.fusion.ExtentDirections.PositiveExtentDirection,
+                "negative": adsk.fusion.ExtentDirections.NegativeExtentDirection,
+                "symmetric": adsk.fusion.ExtentDirections.SymmetricExtentDirection,
+            }
+            extent_dir = dir_map.get(direction)
+            if extent_dir is None:
+                raise RuntimeError(
+                    f"Unknown direction '{direction}' — use positive/negative/symmetric"
+                )
+            ext_input.setAllExtent(extent_dir)
+        elif extent_kind in ("to_object", "to_entity", "to_face"):
+            if not to_entity_token:
+                raise RuntimeError(
+                    "extent='to_object' requires to_entity_token "
+                    "(a face, body, or construction plane token from list_faces)"
+                )
+            to_ent = self._entity_by_token(to_entity_token)
+            ext_input.setOneSideToExtent(to_ent, False)
         else:
-            ext_input.setDistanceExtent(direction == "negative", dist)
+            if height is None:
+                raise RuntimeError(
+                    "height is required when extent='distance' (millimetres)"
+                )
+            dist = adsk.core.ValueInput.createByReal(height)
+            if direction == "symmetric":
+                ext_input.setSymmetricExtent(dist, True)
+            else:
+                ext_input.setDistanceExtent(direction == "negative", dist)
 
         feat = ext_feats.add(ext_input)
         return {
@@ -963,6 +1414,7 @@ class CommandHandler:
             "height": height,
             "operation": operation,
             "direction": direction,
+            "extent": extent_kind,
         }
 
     def revolve(
@@ -976,12 +1428,18 @@ class CommandHandler:
         axis_direction_y: float = 0,
         axis_direction_z: float = 0,
         operation: str = "new_body",
+        sketch_name: str = None,
+        profile_token: str = None,
     ):
         root = self._root()
-        sketch = self._last_sketch()
-        if sketch.profiles.count == 0:
-            raise RuntimeError("No profiles in sketch")
-        profile = sketch.profiles.item(profile_index)
+        if profile_token:
+            profile = self._cast_profile(self._entity_by_token(profile_token))
+            sketch = profile.parentSketch
+        else:
+            sketch = self._resolve_sketch(sketch_name)
+            if sketch.profiles.count == 0:
+                raise RuntimeError("No profiles in sketch")
+            profile = sketch.profiles.item(profile_index)
 
         # Determine axis entity first (required for createInput)
         axis_entity = None
@@ -1025,14 +1483,18 @@ class CommandHandler:
         path_sketch_name: str,
         path_curve_index: int = 0,
         operation: str = "new_body",
+        sketch_name: str = None,
+        profile_token: str = None,
     ):
         root = self._root()
-        sketch = self._last_sketch()
+        if profile_token:
+            profile = self._cast_profile(self._entity_by_token(profile_token))
+        else:
+            sketch = self._resolve_sketch(sketch_name)
+            if sketch.profiles.count == 0:
+                raise RuntimeError("No profiles in sketch")
+            profile = sketch.profiles.item(profile_index)
         path_sketch = self._sketch_by_name(path_sketch_name)
-
-        if sketch.profiles.count == 0:
-            raise RuntimeError("No profiles in sketch")
-        profile = sketch.profiles.item(profile_index)
 
         path_curves = list(path_sketch.sketchCurves)
         path_curve = path_curves[path_curve_index]
@@ -1070,14 +1532,18 @@ class CommandHandler:
         body_name: str = None,
         body_index: int = 0,
         edge_selection: str = "all",
+        edge_tokens: list = None,
     ):
         root = self._root()
-        body = (
-            self._body_by_name(body_name)
-            if body_name
-            else root.bRepBodies.item(body_index)
-        )
-        edges = self._select_edges(body, edge_selection)
+        if edge_tokens:
+            edges = self._edges_from_tokens(edge_tokens)
+        else:
+            body = (
+                self._body_by_name(body_name)
+                if body_name
+                else root.bRepBodies.item(body_index)
+            )
+            edges = self._select_edges(body, edge_selection)
 
         fillets = root.features.filletFeatures
         inp = fillets.createInput()
@@ -1093,14 +1559,18 @@ class CommandHandler:
         body_name: str = None,
         body_index: int = 0,
         edge_selection: str = "all",
+        edge_tokens: list = None,
     ):
         root = self._root()
-        body = (
-            self._body_by_name(body_name)
-            if body_name
-            else root.bRepBodies.item(body_index)
-        )
-        edges = self._select_edges(body, edge_selection)
+        if edge_tokens:
+            edges = self._edges_from_tokens(edge_tokens)
+        else:
+            body = (
+                self._body_by_name(body_name)
+                if body_name
+                else root.bRepBodies.item(body_index)
+            )
+            edges = self._select_edges(body, edge_selection)
 
         chamfers = root.features.chamferFeatures
         inp = chamfers.createInput(edges, True)
@@ -1185,54 +1655,65 @@ class CommandHandler:
         face_selection: str = "top",
         center_x: float = 0,
         center_y: float = 0,
+        center_z: float = None,
+        face_token: str = None,
     ):
         root = self._root()
-        body = (
-            self._body_by_name(body_name)
-            if body_name
-            else root.bRepBodies.item(body_index)
-        )
-
-        # Find the target face.
-        # Comparing bounding boxes is not enough: the side faces of a box reach
-        # the body's max Z too, so the first "hit" is usually a vertical face.
-        # Require a near-horizontal planar face that points up (or down).
-        if face_selection not in ("top", "bottom"):
-            raise RuntimeError(f"Unknown face_selection '{face_selection}'")
-        want_up = face_selection == "top"
-
-        target_face = None
-        best_key = None
-        for face in body.faces:
-            if adsk.core.Plane.cast(face.geometry) is None:
-                continue
-            # Use the evaluator: it reports the face's outward normal, whereas
-            # the underlying plane's normal ignores the face's orientation.
-            ok, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
-            if not ok or not _hole_geom.is_horizontal_face(normal.z, want_up):
-                continue
-            # Rank on the face's own extreme Z, not on an arbitrary point on
-            # it: within the tilt tolerance the two are not the same.
-            fbox = face.boundingBox
-            edge_z = fbox.maxPoint.z if want_up else fbox.minPoint.z
-            key = _hole_geom.face_rank_key(edge_z, face.area, want_up)
-            if best_key is None or key > best_key:
-                best_key, target_face = key, face
-
-        if target_face is None:
-            raise RuntimeError(
-                f"No near-horizontal {face_selection}-facing planar face on "
-                f"'{body.name}'"
+        if face_token:
+            target_face = self._cast_face(self._entity_by_token(face_token))
+            body = getattr(target_face, "body", None)
+            if body is None:
+                raise RuntimeError("Face token has no parent body")
+            if body_name:
+                body = self._body_by_name(body_name)
+        else:
+            body = (
+                self._body_by_name(body_name)
+                if body_name
+                else root.bRepBodies.item(body_index)
             )
+            # Find the target face.
+            # Comparing bounding boxes is not enough: the side faces of a box
+            # reach the body's max Z too, so the first "hit" is usually a
+            # vertical face. Require a near-horizontal planar face that
+            # points up (or down).
+            if face_selection not in ("top", "bottom"):
+                raise RuntimeError(f"Unknown face_selection '{face_selection}'")
+            want_up = face_selection == "top"
 
-        # Place the hole centre. center_x / center_y are model-space XY, so the
-        # caller does not have to know the sketch's own coordinate system. Solve
-        # the face's plane for Z rather than reusing an arbitrary point on it.
+            target_face = None
+            best_key = None
+            for face in body.faces:
+                if adsk.core.Plane.cast(face.geometry) is None:
+                    continue
+                # Use the evaluator: it reports the face's outward normal,
+                # whereas the underlying plane's normal ignores orientation.
+                ok, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
+                if not ok or not _hole_geom.is_horizontal_face(normal.z, want_up):
+                    continue
+                fbox = face.boundingBox
+                edge_z = fbox.maxPoint.z if want_up else fbox.minPoint.z
+                key = _hole_geom.face_rank_key(edge_z, face.area, want_up)
+                if best_key is None or key > best_key:
+                    best_key, target_face = key, face
+
+            if target_face is None:
+                raise RuntimeError(
+                    f"No near-horizontal {face_selection}-facing planar face "
+                    f"on '{body.name}'"
+                )
+
+        # Place the hole centre in model space, then convert to sketch space.
         plane = adsk.core.Plane.cast(target_face.geometry)
-        n, o = plane.normal, plane.origin
-        center_z = _hole_geom.plane_z_at(
-            (n.x, n.y, n.z), (o.x, o.y, o.z), center_x, center_y
-        )
+        if center_z is None:
+            if plane is None:
+                pt = target_face.pointOnFace
+                center_z = pt.z
+            else:
+                n, o = plane.normal, plane.origin
+                center_z = _hole_geom.plane_z_at(
+                    (n.x, n.y, n.z), (o.x, o.y, o.z), center_x, center_y
+                )
         sketch = root.sketches.add(target_face)
         sketch_pt = sketch.sketchPoints.add(
             sketch.modelToSketchSpace(
@@ -1849,7 +2330,7 @@ class CommandHandler:
     def import_mesh(
         self, file_path: str, component_name: str = None, units: str = "mm"
     ):
-        """Import mesh file (STL/OBJ/3MF) as mesh body. Values returned in cm."""
+        """Import mesh file (STL/OBJ/3MF) as mesh body. Values returned in mm."""
         if not os.path.exists(file_path):
             raise RuntimeError(f"Mesh file not found: {file_path}")
 
@@ -1898,6 +2379,33 @@ class CommandHandler:
                     bb.maxPoint.z - bb.minPoint.z,
                 ],
             },
+        }
+
+    def import_step(self, file_path: str, component_name: str = None):
+        """Import a STEP/STP file into the active design."""
+        if not os.path.exists(file_path):
+            raise RuntimeError(f"STEP file not found: {file_path}")
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in (".step", ".stp"):
+            raise RuntimeError(
+                f"Expected a .step/.stp file, got '{ext or '(none)'}'"
+            )
+
+        target = (
+            self._component_by_name(component_name) if component_name else self._root()
+        )
+        import_mgr = self.app.importManager
+        opts = import_mgr.createSTEPImportOptions(file_path)
+        imported = import_mgr.importToTarget(opts, target)
+        bodies = [
+            target.bRepBodies.item(i).name for i in range(target.bRepBodies.count)
+        ]
+        return {
+            "imported": bool(imported),
+            "file_path": file_path,
+            "component": target.name,
+            "body_count": target.bRepBodies.count,
+            "bodies": bodies,
         }
 
     def boolean_operation(
@@ -2073,6 +2581,133 @@ class CommandHandler:
 
         return {"deleted": deleted, "remaining": remaining, "errors": errors}
 
+    def delete_entity(
+        self,
+        entity_type: str = None,
+        name: str = None,
+        entity_token: str = None,
+    ):
+        """Delete one body, sketch, feature, or construction entity."""
+        if entity_token:
+            ent = self._entity_by_token(entity_token)
+            deleted_name = getattr(ent, "name", None)
+            deleted_type = type(ent).__name__
+            if not hasattr(ent, "deleteMe"):
+                raise RuntimeError(f"Entity type {deleted_type} cannot be deleted")
+            try:
+                ent.deleteMe()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not delete {deleted_type} '{deleted_name}': {exc}. "
+                    "Parametric bodies are owned by features — delete the "
+                    "feature instead (list_timeline, then delete_entity "
+                    "entity_type='feature')."
+                ) from exc
+            return {
+                "deleted": True,
+                "entity_type": deleted_type,
+                "name": deleted_name,
+                "entity_token": entity_token,
+            }
+
+        if not entity_type or not name:
+            raise RuntimeError(
+                "Provide entity_token, or both entity_type and name"
+            )
+
+        kind = entity_type.lower()
+        if kind == "body":
+            ent = self._body_by_name(name)
+        elif kind == "sketch":
+            ent = self._sketch_by_name(name)
+        elif kind == "feature":
+            ent = self._feature_by_name(name)
+        elif kind in ("construction_plane", "plane"):
+            ent = self._plane_by_name(name)
+        elif kind in ("construction_axis", "axis"):
+            ent = self._axis_by_name(name)
+        else:
+            raise RuntimeError(
+                f"Unknown entity_type '{entity_type}' — use body, sketch, "
+                "feature, construction_plane, or construction_axis"
+            )
+
+        if not hasattr(ent, "deleteMe"):
+            raise RuntimeError(f"Entity type {type(ent).__name__} cannot be deleted")
+        try:
+            ent.deleteMe()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not delete {kind} '{name}': {exc}. "
+                "Parametric bodies are owned by features — delete the "
+                "feature instead."
+            ) from exc
+        return {"deleted": True, "entity_type": kind, "name": name}
+
+    def new_document(self, name: str = None):
+        doc = self.app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+        return {
+            "created": True,
+            "document_name": doc.name if doc else None,
+            "requested_name": name,
+        }
+
+    def open_document(self, file_path: str):
+        if not os.path.exists(file_path):
+            raise RuntimeError(f"File not found: {file_path}")
+        ext = os.path.splitext(file_path)[1].lower()
+        import_mgr = self.app.importManager
+        if ext in (".f3d", ".f3z"):
+            opts = import_mgr.createFusionArchiveImportOptions(file_path)
+        elif ext in (".step", ".stp"):
+            opts = import_mgr.createSTEPImportOptions(file_path)
+        elif ext in (".iges", ".igs"):
+            opts = import_mgr.createIGESImportOptions(file_path)
+        elif ext == ".sat":
+            opts = import_mgr.createSATImportOptions(file_path)
+        else:
+            raise RuntimeError(
+                f"Unsupported file type '{ext}' — use .f3d/.step/.iges/.sat"
+            )
+        doc = import_mgr.importToNewDocument(opts)
+        doc_name = getattr(doc, "name", None) if doc is not None else None
+        return {
+            "opened": True,
+            "file_path": file_path,
+            "document_name": doc_name,
+        }
+
+    def save_document(self, file_path: str = None, comment: str = ""):
+        doc = self.app.activeDocument
+        if doc is None:
+            raise RuntimeError("No active design")
+        if file_path:
+            if not file_path.lower().endswith(".f3d"):
+                file_path = file_path + ".f3d"
+            parent = os.path.dirname(file_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            export_mgr = self._design().exportManager
+            opts = export_mgr.createFusionArchiveExportOptions(file_path)
+            export_mgr.execute(opts)
+            return {
+                "saved": True,
+                "file_path": file_path,
+                "save_mode": "local_f3d",
+                "document_name": doc.name,
+            }
+        if not getattr(doc, "isSaved", False):
+            raise RuntimeError(
+                "Document has never been saved — pass file_path to write a "
+                "local .f3d"
+            )
+        ok = doc.save(comment or "MCP save")
+        return {
+            "saved": bool(ok),
+            "document_name": doc.name,
+            "save_mode": "cloud",
+        }
+
     def undo(self):
         design = self._design()
         type_before = design.designType
@@ -2154,7 +2789,7 @@ class CommandHandler:
     ):
         """Parametric box: sketch rectangle + dimensions + extrude.
 
-        length/width/height may be numeric (cm) or string expressions
+        length/width/height may be numeric (mm) or string expressions
         (e.g. 'boxL', '56 mm'). Expressions are applied via Fusion's
         parameter system so later changes to User Parameters propagate.
         """
@@ -2685,7 +3320,7 @@ class CommandHandler:
         """Compare two mesh bodies; report per-node deviation statistics.
 
         Uses PolygonMesh.compareWith (Fusion 2026): for every node in mesh A,
-        the signed distance to the closest point on mesh B (cm).  Positive
+        the signed distance to the closest point on mesh B (mm).  Positive
         means the node lies on the surface-normal side of B.
         """
         design = self._design()
@@ -2726,7 +3361,7 @@ class CommandHandler:
             "mean_abs_deviation": mean_abs,
             "rms_deviation": rms,
             "max_abs_deviation": max(abs_dev),
-            "units": "cm",
+            "units": "mm",
         }
 
     # ------------------------------------------------------------------
@@ -2846,7 +3481,9 @@ class CommandHandler:
             )
         return {"parameters": params, "count": len(params)}
 
-    def create_parameter(self, name: str, value: float, unit: str, comment: str = None):
+    def create_parameter(
+        self, name: str, value: float, unit: str = "mm", comment: str = None
+    ):
         design = self._design()
         params = design.userParameters
         unit = _param_units.normalise_unit(unit)
@@ -3619,7 +4256,7 @@ class CommandHandler:
         """Capture body_count, overall bbox, and total mass of the design.
 
         Best-effort — returns None if the design isn't readable yet.  Mass
-        is reported in grams; bbox in cm (Fusion's internal unit).
+        is reported in grams; bbox is converted to mm on the way out.
         """
         try:
             design = self.app.activeProduct

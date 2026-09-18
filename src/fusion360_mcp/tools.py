@@ -7,6 +7,21 @@ JSON Schema that the MCP SDK validates before forwarding arguments.
 
 import mcp.types as types
 
+_SKETCH_NAME = {
+    "type": "string",
+    "description": (
+        "Target sketch by name. Omit to use the most recently created sketch."
+    ),
+}
+_ENTITY_TOKEN = {
+    "type": "string",
+    "description": (
+        "Fusion entityToken from list_faces / list_edges / list_profiles / "
+        "list_sketch_curves. Tokens go stale after timeline edits — re-list "
+        "before reuse."
+    ),
+}
+
 TOOLS: list[dict] = [
     # ── scene / query ────────────────────────────────────────────────
     {
@@ -21,7 +36,10 @@ TOOLS: list[dict] = [
     {
         "name": "get_object_info",
         "title": "Get Object Info",
-        "description": "Get detailed info about a named body or sketch",
+        "description": (
+            "Get detailed info about a named body or sketch, including "
+            "entityToken, face/edge/profile counts, and bounding box"
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["name"],
@@ -35,7 +53,7 @@ TOOLS: list[dict] = [
         "title": "Get Bounding Box",
         "description": (
             "Axis-aligned bounding box for a body or component by name. "
-            "Returns min, max, size, and center in cm (Fusion internal units). "
+            "Returns min, max, size, and center in millimetres. "
             "For components, unions bounding boxes of all contained bodies. "
             "Useful for measuring imported reference geometry."
         ),
@@ -50,11 +68,87 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "name": "list_faces",
+        "title": "List Faces",
+        "description": (
+            "List faces of a body with entityToken, geometry type "
+            "(plane/cylinder/sphere/...), area, normal, and bounding box. "
+            "Use the token with create_sketch, create_hole, or extrude "
+            "extent='to_object'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["body_name"],
+            "properties": {
+                "body_name": {"type": "string", "description": "Body name"},
+            },
+        },
+    },
+    {
+        "name": "list_edges",
+        "title": "List Edges",
+        "description": (
+            "List edges of a body with entityToken, curve type, length, "
+            "and endpoints. Pass tokens to fillet/chamfer via edge_tokens."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["body_name"],
+            "properties": {
+                "body_name": {"type": "string", "description": "Body name"},
+            },
+        },
+    },
+    {
+        "name": "list_profiles",
+        "title": "List Profiles",
+        "description": (
+            "List closed profiles in a sketch with entityToken, area, and "
+            "centroid. Pass profile_token to extrude/revolve/sweep."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sketch_name": _SKETCH_NAME,
+            },
+        },
+    },
+    {
+        "name": "list_sketch_curves",
+        "title": "List Sketch Curves",
+        "description": (
+            "List curves in a sketch with entityToken, type, construction "
+            "flag, and endpoints."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sketch_name": _SKETCH_NAME,
+            },
+        },
+    },
+    {
+        "name": "list_timeline",
+        "title": "List Timeline",
+        "description": (
+            "List timeline features with index, name, type, suppress and "
+            "rollback state. Use names with delete_entity / suppress_feature."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
     # ── sketch ───────────────────────────────────────────────────────
     {
         "name": "create_sketch",
         "title": "Create Sketch",
-        "description": "Create a new sketch on xy/yz/xz plane, optionally offset",
+        "description": (
+            "Create a sketch on xy/yz/xz (optional offset), a named "
+            "construction plane, or a body face (face_token or "
+            "body_name+face_index from list_faces). Optionally set name."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -65,7 +159,31 @@ TOOLS: list[dict] = [
                 },
                 "z_offset": {
                     "type": "number",
-                    "description": "Offset distance from the plane (cm)",
+                    "description": "Offset distance from the plane (mm)",
+                },
+                "face_token": {
+                    **_ENTITY_TOKEN,
+                    "description": (
+                        "Sketch on this BRep face (from list_faces). "
+                        "Takes precedence over plane / plane_name."
+                    ),
+                },
+                "plane_name": {
+                    "type": "string",
+                    "description": "Existing construction plane name",
+                },
+                "body_name": {
+                    "type": "string",
+                    "description": "Body whose face to sketch on (with face_index)",
+                },
+                "face_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Face index from list_faces (with body_name)",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name to assign to the new sketch",
                 },
             },
         },
@@ -73,7 +191,10 @@ TOOLS: list[dict] = [
     {
         "name": "draw_rectangle",
         "title": "Draw Rectangle",
-        "description": "Draw a rectangle in the most recent sketch",
+        "description": (
+            "Draw a rectangle in a sketch (named via sketch_name, else "
+            "the most recent sketch). Coordinates are sketch-space, mm."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["width", "height"],
@@ -83,13 +204,17 @@ TOOLS: list[dict] = [
                 "origin_x": {"type": "number", "default": 0},
                 "origin_y": {"type": "number", "default": 0},
                 "origin_z": {"type": "number", "default": 0},
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
     {
         "name": "draw_circle",
         "title": "Draw Circle",
-        "description": "Draw a circle in the most recent sketch",
+        "description": (
+            "Draw a circle in a sketch (named via sketch_name, else "
+            "the most recent sketch). Coordinates are sketch-space, mm."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["radius"],
@@ -98,13 +223,17 @@ TOOLS: list[dict] = [
                 "center_x": {"type": "number", "default": 0},
                 "center_y": {"type": "number", "default": 0},
                 "center_z": {"type": "number", "default": 0},
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
     {
         "name": "draw_line",
         "title": "Draw Line",
-        "description": "Draw a line in the most recent sketch",
+        "description": (
+            "Draw a line in a sketch (named via sketch_name, else "
+            "the most recent sketch). Coordinates are sketch-space, mm."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["start_x", "start_y", "end_x", "end_y"],
@@ -115,6 +244,7 @@ TOOLS: list[dict] = [
                 "end_x": {"type": "number"},
                 "end_y": {"type": "number"},
                 "end_z": {"type": "number", "default": 0},
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
@@ -122,12 +252,21 @@ TOOLS: list[dict] = [
     {
         "name": "extrude",
         "title": "Extrude",
-        "description": "Extrude a sketch profile",
+        "description": (
+            "Extrude a sketch profile. Prefer sketch_name or profile_token "
+            "over the most-recent-sketch default. extent='distance' needs "
+            "height (mm); 'through_all' ignores height; 'to_object' needs "
+            "to_entity_token from list_faces."
+        ),
         "inputSchema": {
             "type": "object",
-            "required": ["height"],
             "properties": {
-                "height": {"type": "number"},
+                "height": {
+                    "type": "number",
+                    "description": (
+                        "Extrude distance in mm (required for extent=distance)"
+                    ),
+                },
                 "profile_index": {"type": "integer", "default": 0, "minimum": 0},
                 "operation": {
                     "type": "string",
@@ -138,6 +277,26 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "enum": ["positive", "negative", "symmetric"],
                     "default": "positive",
+                },
+                "sketch_name": _SKETCH_NAME,
+                "profile_token": {
+                    **_ENTITY_TOKEN,
+                    "description": (
+                        "Profile token from list_profiles "
+                        "(overrides sketch_name/index)"
+                    ),
+                },
+                "extent": {
+                    "type": "string",
+                    "enum": ["distance", "through_all", "to_object"],
+                    "default": "distance",
+                },
+                "to_entity_token": {
+                    **_ENTITY_TOKEN,
+                    "description": (
+                        "Face, body, or construction-plane token to extrude to "
+                        "(required when extent='to_object')"
+                    ),
                 },
             },
         },
@@ -163,13 +322,21 @@ TOOLS: list[dict] = [
                     "enum": ["new_body", "join", "cut", "intersect"],
                     "default": "new_body",
                 },
+                "sketch_name": _SKETCH_NAME,
+                "profile_token": {
+                    **_ENTITY_TOKEN,
+                    "description": "Profile token from list_profiles",
+                },
             },
         },
     },
     {
         "name": "fillet",
         "title": "Fillet Edges",
-        "description": "Round edges of a body",
+        "description": (
+            "Round edges of a body. Prefer edge_tokens from list_edges; "
+            "edge_selection (all/top/bottom/vertical) is a coarse fallback."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["radius"],
@@ -182,13 +349,25 @@ TOOLS: list[dict] = [
                     "enum": ["all", "top", "bottom", "vertical"],
                     "default": "all",
                 },
+                "edge_tokens": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": (
+                        "Edge entityTokens from list_edges "
+                        "(overrides edge_selection)"
+                    ),
+                },
             },
         },
     },
     {
         "name": "chamfer",
         "title": "Chamfer Edges",
-        "description": "Chamfer edges of a body",
+        "description": (
+            "Chamfer edges of a body. Prefer edge_tokens from list_edges; "
+            "edge_selection is a coarse fallback."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["distance"],
@@ -200,6 +379,15 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "enum": ["all", "top", "bottom", "vertical"],
                     "default": "all",
+                },
+                "edge_tokens": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": (
+                        "Edge entityTokens from list_edges "
+                        "(overrides edge_selection)"
+                    ),
                 },
             },
         },
@@ -319,6 +507,91 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "delete_entity",
+        "title": "Delete Entity",
+        "description": (
+            "Delete one body, sketch, feature, or construction entity. "
+            "Prefer entity_token from list_* tools. Parametric bodies are "
+            "owned by features — delete the feature (list_timeline) rather "
+            "than the body."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": [
+                        "body",
+                        "sketch",
+                        "feature",
+                        "construction_plane",
+                        "construction_axis",
+                    ],
+                    "description": "Required with name when entity_token is omitted",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Entity name (with entity_type)",
+                },
+                "entity_token": _ENTITY_TOKEN,
+            },
+        },
+    },
+    {
+        "name": "new_document",
+        "title": "New Document",
+        "description": "Create a new empty Fusion design document and make it active",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Requested name (applied on first save)",
+                },
+            },
+        },
+    },
+    {
+        "name": "open_document",
+        "title": "Open Document",
+        "description": (
+            "Open a local .f3d/.step/.iges/.sat file as a new Fusion document. "
+            "The path is on the Fusion host."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["file_path"],
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path on the Fusion host",
+                },
+            },
+        },
+    },
+    {
+        "name": "save_document",
+        "title": "Save Document",
+        "description": (
+            "Save the active design. Pass file_path to write a local .f3d; "
+            "omit it to save to Fusion Team (only if the document was saved "
+            "before)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Local .f3d destination (Fusion host path)",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Cloud save comment",
+                },
+            },
+        },
+    },
+    {
         "name": "undo",
         "title": "Undo",
         "description": "Undo the last operation",
@@ -364,6 +637,11 @@ TOOLS: list[dict] = [
                     "enum": ["new_body", "join", "cut", "intersect"],
                     "default": "new_body",
                 },
+                "sketch_name": _SKETCH_NAME,
+                "profile_token": {
+                    **_ENTITY_TOKEN,
+                    "description": "Profile token from list_profiles",
+                },
             },
         },
     },
@@ -404,11 +682,12 @@ TOOLS: list[dict] = [
                 "radius": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": "Circumradius (cm)",
+                    "description": "Circumradius (mm)",
                 },
                 "center_x": {"type": "number", "default": 0},
                 "center_y": {"type": "number", "default": 0},
                 "center_z": {"type": "number", "default": 0},
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
@@ -434,6 +713,7 @@ TOOLS: list[dict] = [
                     "minimum": -360,
                     "maximum": 360,
                 },
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
@@ -462,12 +742,27 @@ TOOLS: list[dict] = [
                 "center_x": {
                     "type": "number",
                     "default": 0,
-                    "description": "Hole centre X in model space (cm)",
+                    "description": "Hole centre X in model space (mm)",
                 },
                 "center_y": {
                     "type": "number",
                     "default": 0,
-                    "description": "Hole centre Y in model space (cm)",
+                    "description": "Hole centre Y in model space (mm)",
+                },
+                "center_z": {
+                    "type": "number",
+                    "description": (
+                        "Hole centre Z in model space (mm). Required for "
+                        "non-horizontal faces; omitted Z is solved from the "
+                        "face plane."
+                    ),
+                },
+                "face_token": {
+                    **_ENTITY_TOKEN,
+                    "description": (
+                        "Face to drill into (from list_faces). Overrides "
+                        "face_selection."
+                    ),
                 },
             },
         },
@@ -485,13 +780,13 @@ TOOLS: list[dict] = [
                 "x_spacing": {
                     "type": "number",
                     "default": 1.0,
-                    "description": "Spacing between columns (cm)",
+                    "description": "Spacing between columns (mm)",
                 },
                 "y_count": {"type": "integer", "minimum": 1, "default": 1},
                 "y_spacing": {
                     "type": "number",
                     "default": 1.0,
-                    "description": "Spacing between rows (cm)",
+                    "description": "Spacing between rows (mm)",
                 },
             },
         },
@@ -733,6 +1028,28 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "name": "import_step",
+        "title": "Import STEP",
+        "description": (
+            "Import a STEP/STP file into the active design as BRep bodies. "
+            "Path is on the Fusion host. Prefer this over import_mesh for CAD."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["file_path"],
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to .step/.stp on the Fusion host",
+                },
+                "component_name": {
+                    "type": "string",
+                    "description": "Target component name (omit for root)",
+                },
+            },
+        },
+    },
     # ── parameters ─────────────────────────────────────────────────────
     {
         "name": "get_parameters",
@@ -749,7 +1066,7 @@ TOOLS: list[dict] = [
         "description": "Create a new user parameter",
         "inputSchema": {
             "type": "object",
-            "required": ["name", "value", "unit"],
+            "required": ["name", "value"],
             "properties": {
                 "name": {"type": "string", "description": "Parameter name"},
                 "value": {
@@ -758,9 +1075,10 @@ TOOLS: list[dict] = [
                 },
                 "unit": {
                     "type": "string",
+                    "default": "mm",
                     "description": (
                         "Unit the value is given in (e.g. 'mm', 'cm', 'in', "
-                        "'deg'). Empty means unitless."
+                        "'deg'). Default mm. Empty string means unitless."
                     ),
                 },
                 "comment": {"type": "string", "description": "Optional comment"},
@@ -889,7 +1207,7 @@ TOOLS: list[dict] = [
         "title": "Add Sketch Dimension",
         "description": (
             "Add a driving dimension to constrain sketch geometry. "
-            "Value is in cm for distances, degrees for angles."
+            "Value is in mm for distances, degrees for angles."
         ),
         "inputSchema": {
             "type": "object",
@@ -908,7 +1226,7 @@ TOOLS: list[dict] = [
                 },
                 "value": {
                     "type": "number",
-                    "description": "Dimension value (cm or degrees)",
+                    "description": "Dimension value (mm or degrees)",
                 },
                 "entity_one": {
                     "type": "integer",
@@ -956,7 +1274,7 @@ TOOLS: list[dict] = [
                 },
                 "offset": {
                     "type": "number",
-                    "description": "Offset distance in cm (for offset)",
+                    "description": "Offset distance in mm (for offset)",
                 },
                 "angle": {
                     "type": "number",
@@ -1063,9 +1381,9 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "UCS name"},
-                "x": {"type": "number", "default": 0, "description": "Origin X (cm)"},
-                "y": {"type": "number", "default": 0, "description": "Origin Y (cm)"},
-                "z": {"type": "number", "default": 0, "description": "Origin Z (cm)"},
+                "x": {"type": "number", "default": 0, "description": "Origin X (mm)"},
+                "y": {"type": "number", "default": 0, "description": "Origin Y (mm)"},
+                "z": {"type": "number", "default": 0, "description": "Origin Z (mm)"},
                 "angle_x": {
                     "type": "number",
                     "default": 0,
@@ -1118,6 +1436,7 @@ TOOLS: list[dict] = [
                     "default": 3,
                     "description": ("Spline degree (only for control_points, 3 or 5)"),
                 },
+                "sketch_name": _SKETCH_NAME,
             },
         },
     },
@@ -1141,7 +1460,7 @@ TOOLS: list[dict] = [
                 "offset_distance": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": "Offset distance (cm)",
+                    "description": "Offset distance (mm)",
                 },
                 "direction_x": {
                     "type": "number",
@@ -1267,7 +1586,7 @@ TOOLS: list[dict] = [
                 "thread_length": {
                     "type": "number",
                     "description": (
-                        "Thread length in cm (only if is_full_length=false)"
+                        "Thread length in mm (only if is_full_length=false)"
                     ),
                 },
             },
@@ -1378,7 +1697,7 @@ TOOLS: list[dict] = [
                 "body_name": {"type": "string"},
                 "distance": {
                     "type": "number",
-                    "description": ("Offset distance in cm (positive = outward)"),
+                    "description": ("Offset distance in mm (positive = outward)"),
                 },
                 "face_selection": {
                     "type": "string",
@@ -1467,7 +1786,7 @@ TOOLS: list[dict] = [
         "description": (
             "Create a history-based rectangular box via sketch rectangle + "
             "extrude (unlike create_box which uses TemporaryBRepManager). "
-            "length/width/height accept a number (cm, Fusion internal unit) "
+            "length/width/height accept a number (mm) "
             "or a string expression referencing User Parameters "
             "(e.g. 'boxL', '56 mm', 'outer - 2 * wall_t'). "
             "Call create_parameter first to define named parameters."
@@ -1481,28 +1800,28 @@ TOOLS: list[dict] = [
                         {"type": "number", "minimum": 0.001},
                         {"type": "string"},
                     ],
-                    "description": "Along sketch X: number (cm) or expression",
+                    "description": "Along sketch X: number (mm) or expression",
                 },
                 "width": {
                     "oneOf": [
                         {"type": "number", "minimum": 0.001},
                         {"type": "string"},
                     ],
-                    "description": "Along sketch Y: number (cm) or expression",
+                    "description": "Along sketch Y: number (mm) or expression",
                 },
                 "height": {
                     "oneOf": [
                         {"type": "number", "minimum": 0.001},
                         {"type": "string"},
                     ],
-                    "description": "Extrude distance: number (cm) or expression",
+                    "description": "Extrude distance: number (mm) or expression",
                 },
                 "origin_x": {"type": "number", "default": 0},
                 "origin_y": {"type": "number", "default": 0},
                 "origin_z": {
                     "type": "number",
                     "default": 0,
-                    "description": "Z-offset of sketch plane (cm)",
+                    "description": "Z-offset of sketch plane (mm)",
                 },
                 "plane": {
                     "type": "string",
@@ -1723,7 +2042,7 @@ TOOLS: list[dict] = [
                 "offset": {
                     "type": "number",
                     "default": 0,
-                    "description": "Offset from the plane (cm)",
+                    "description": "Offset from the plane (mm)",
                 },
             },
         },
@@ -1755,7 +2074,7 @@ TOOLS: list[dict] = [
         "title": "Compare Mesh Bodies",
         "description": (
             "Compare two mesh bodies and return deviation statistics "
-            "(min/max/mean/RMS signed distance in cm) — e.g. validate an "
+            "(min/max/mean/RMS signed distance in mm) — e.g. validate an "
             "imported STL against a reference mesh. Requires Fusion 2026+."
         ),
         "inputSchema": {
@@ -1928,7 +2247,7 @@ TOOLS: list[dict] = [
                 "tolerance": {
                     "type": "number",
                     "default": 0.01,
-                    "description": "Stitch tolerance (cm)",
+                    "description": "Stitch tolerance (mm)",
                 },
             },
         },
@@ -1945,7 +2264,7 @@ TOOLS: list[dict] = [
                 "thickness": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": "Thickness (cm)",
+                    "description": "Thickness (mm)",
                 },
                 "direction": {
                     "type": "string",
@@ -1971,7 +2290,7 @@ TOOLS: list[dict] = [
                 "distance": {
                     "type": "number",
                     "default": 1.0,
-                    "description": "Ruled surface distance (cm)",
+                    "description": "Ruled surface distance (mm)",
                 },
                 "rule_type": {
                     "type": "string",
@@ -2017,7 +2336,7 @@ TOOLS: list[dict] = [
                 "height": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": "Flange height (cm)",
+                    "description": "Flange height (mm)",
                 },
                 "angle": {
                     "type": "number",
@@ -2026,7 +2345,7 @@ TOOLS: list[dict] = [
                 },
                 "bend_radius": {
                     "type": "number",
-                    "description": "Bend radius (cm)",
+                    "description": "Bend radius (mm)",
                 },
             },
         },
@@ -2051,7 +2370,7 @@ TOOLS: list[dict] = [
                 },
                 "bend_radius": {
                     "type": "number",
-                    "description": "Override bend radius (cm)",
+                    "description": "Override bend radius (mm)",
                 },
             },
         },
@@ -2123,17 +2442,17 @@ TOOLS: list[dict] = [
                 "stock_offset_sides": {
                     "type": "number",
                     "default": 0,
-                    "description": "Side offset (cm)",
+                    "description": "Side offset (mm)",
                 },
                 "stock_offset_top": {
                     "type": "number",
                     "default": 0,
-                    "description": "Top offset (cm)",
+                    "description": "Top offset (mm)",
                 },
                 "stock_offset_bottom": {
                     "type": "number",
                     "default": 0,
-                    "description": "Bottom offset (cm)",
+                    "description": "Bottom offset (mm)",
                 },
             },
         },
@@ -2195,16 +2514,16 @@ TOOLS: list[dict] = [
                 "stepdown": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": "Axial depth of cut (cm)",
+                    "description": "Axial depth of cut (mm)",
                 },
                 "stepover": {
                     "type": "number",
                     "minimum": 0.001,
-                    "description": ("Radial stepover (cm)"),
+                    "description": ("Radial stepover (mm)"),
                 },
                 "feed_rate": {
                     "type": "number",
-                    "description": "Feed rate (cm/min)",
+                    "description": "Feed rate (mm/min)",
                 },
                 "spindle_speed": {
                     "type": "number",
@@ -2432,6 +2751,11 @@ _READ_ONLY = {
     "get_object_info",
     "get_bounding_box",
     "list_components",
+    "list_faces",
+    "list_edges",
+    "list_profiles",
+    "list_sketch_curves",
+    "list_timeline",
     "get_parameters",
     "get_physical_properties",
     "measure_distance",
@@ -2445,13 +2769,18 @@ _READ_ONLY = {
     "get_design_type",
     "render_view",
 }
-_DESTRUCTIVE = {"delete_all", "delete_parameter"}
+_DESTRUCTIVE = {"delete_all", "delete_parameter", "delete_entity"}
 _IDEMPOTENT = {
     "ping",
     "get_scene_info",
     "get_object_info",
     "get_bounding_box",
     "list_components",
+    "list_faces",
+    "list_edges",
+    "list_profiles",
+    "list_sketch_curves",
+    "list_timeline",
     "get_parameters",
     "get_physical_properties",
     "measure_distance",
